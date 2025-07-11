@@ -82,7 +82,7 @@ f1 = st.selectbox("1stナビを選択", [1, 2, 3])
 if st.button("🧠 AIで2ndナビ候補を予測"):
     second_probs = {}
     for f2 in [1, 2, 3]:
-        if f2 != f1 and f2 != f3:
+        if f2 != f1:
             prob = predict_magic(df, f1, f2, model)
             second_probs[f2] = prob
     if second_probs:
