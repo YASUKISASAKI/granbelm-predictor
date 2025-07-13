@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 
 st.set_page_config(page_title="グランベルム 類似履歴予測ツール", layout="centered")
-st.title("🔍 グランベルム 類似履歴型 2ndナビ予測ツール v5.2.1（NaN対応）")
+st.title("🔍 グランベルム 類似履歴型 2ndナビ予測ツール v5.2.2（比較対象10件に固定）")
 
 @st.cache_data
 def load_history():
@@ -23,21 +23,20 @@ def hamming_distance(s1, s2):
     return sum(c1 != c2 for c1, c2 in zip(s1, s2))
 
 def partial_match_score(nav1, nav2):
-    return sum([nav1[i] == nav2[i] for i in range(3)])  # 最大3点
+    return sum([nav1[i] == nav2[i] for i in range(3)])
 
 def suggest_second_based_on_similarity(df, recent_df, selected_1st):
     pattern_counts = recent_df["nav"].dropna().astype(str).value_counts()
     if pattern_counts.empty:
         return None, 0.0
-    common_patterns = pattern_counts.head(3).index.tolist()
+    common_patterns = pattern_counts.head(10).index.tolist()
 
     scored_rows = []
     for idx, row in df.iterrows():
         nav_str = str(row["nav"])
         if len(nav_str) != 3:
             continue
-        first_digit = nav_str[0]
-        if first_digit != str(selected_1st):
+        if nav_str[0] != str(selected_1st):
             continue
         max_score = 0
         for recent_nav in common_patterns:
