@@ -1,13 +1,13 @@
-
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
 
-st.set_page_config(page_title="グランベルム 類似履歴予測ツール", layout="centered")
-st.title("🔍 グランベルム 類似履歴型 2ndナビ予測ツール v5.2.2（比較対象10件に固定）")
+st.set_page_config(page_title="グランベルム 2択予想ツール", layout="centered")
+st.title("グランベルム 2択予想ツール（モバイル対応版 v2）")
 
-@st.cache_data
 def load_history():
     try:
         return pd.read_csv("Granbelm history.csv")
@@ -17,83 +17,81 @@ def load_history():
 def save_history(df):
     df.to_csv("Granbelm history.csv", index=False)
 
-def hamming_distance(s1, s2):
-    if len(s1) != len(s2):
-        return float("inf")
-    return sum(c1 != c2 for c1, c2 in zip(s1, s2))
+def create_features(df):
+    df = df.copy()
+    df["1st"] = df["nav"].astype(str).str[0].astype(int)
+    df["2nd"] = df["nav"].astype(str).str[1].astype(int)
+    df["3rd"] = df["nav"].astype(str).str[2].astype(int)
+    df["role_encoded"] = LabelEncoder().fit_transform(df["role"])
+    df["prev_1st"] = df["nav"].shift(1).fillna("000").astype(str).str[0].astype(int)
+    df["is_magic"] = (df["role"] == "魔力目").astype(int)
+    return df
 
-def partial_match_score(nav1, nav2):
-    return sum([nav1[i] == nav2[i] for i in range(3)])
+def train_model(df):
+    if df.empty:
+        return None
+    df = create_features(df)
+    X = df[["1st", "2nd", "3rd", "prev_1st"]]
+    y = df["is_magic"]
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X, y)
+    return model
 
-def suggest_second_based_on_similarity(df, recent_df, selected_1st):
-    pattern_counts = recent_df["nav"].dropna().astype(str).value_counts()
-    if pattern_counts.empty:
-        return None, 0.0
-    common_patterns = pattern_counts.head(10).index.tolist()
-
-    scored_rows = []
-    for idx, row in df.iterrows():
-        nav_str = str(row["nav"])
-        if len(nav_str) != 3:
-            continue
-        if nav_str[0] != str(selected_1st):
-            continue
-        max_score = 0
-        for recent_nav in common_patterns:
-            if not isinstance(recent_nav, str):
-                continue
-            if len(nav_str) == len(recent_nav):
-                h_score = max(0, 3 - hamming_distance(nav_str, recent_nav))
-                p_score = partial_match_score(nav_str, recent_nav)
-                total = h_score + p_score
-                max_score = max(max_score, total)
-        scored_rows.append((nav_str, row["role"], max_score))
-
-    if not scored_rows:
-        return None, 0.0
-
-    sim_df = pd.DataFrame(scored_rows, columns=["nav", "role", "sim_score"])
-    sim_df = sim_df.sort_values(by="sim_score", ascending=False).head(20)
-    sim_df["2nd"] = sim_df["nav"].astype(str).str[1].astype(int)
-    success_rates = sim_df.groupby("2nd")["role"].apply(lambda x: (x == "魔力目").mean())
-    if success_rates.empty:
-        return None, 0.0
-    best_2nd = success_rates.idxmax()
-    confidence = round(success_rates.max() * 100, 1)
-    return best_2nd, confidence
+def predict_magic(df, first, second, model):
+    prev_lst = int(df["nav"].iloc[-1][0]) if not df.empty else 1
+    X_test = np.array([[int(first), int(second), 1, prev_lst]])  # 3rdは仮に1
+    prob = model.predict_proba(X_test)[0][1]
+    return round(prob * 100, 1)
 
 df = load_history()
-st.subheader("➕ 実践履歴の追加（ボタン式）")
+model = train_model(df)
+
+st.subheader("📥 OCR履歴のインポート")
+uploaded_file = st.file_uploader("CSVファイルをアップロード", type=["csv"])
+if uploaded_file is not None:
+    try:
+        ocr_df = pd.read_csv(uploaded_file)
+        if set(["nav", "role"]).issubset(ocr_df.columns):
+            df = pd.concat([df, ocr_df], ignore_index=True)
+            save_history(df)
+            df = load_history()
+            st.success("OCRデータをインポートしました")
+        else:
+            st.error("CSVに 'nav' と 'role' の列が必要です")
+    except Exception as e:
+        st.error(f"読み込みエラー: {e}")
+
+st.subheader("➕ 押し順履歴をボタンで追加")
 col1, col2 = st.columns(2)
 with col1:
-    role_input = st.selectbox("成立役", ["魔力目", "ベル"], key="role_select")
-with col2:
-    if st.button("履歴をリセット"):
-        df = pd.DataFrame(columns=["nav", "role"])
-        save_history(df)
-        st.success("履歴をリセットしました")
+    role = st.selectbox("成立役", ["魔力目", "ベル", "リプレイ"])
 
-navs = ["123", "132", "213", "231", "312", "321"]
-nav_cols = st.columns(3)
-for i, nav in enumerate(navs):
-    if nav_cols[i % 3].button(nav):
-        new_row = pd.DataFrame([[nav, role_input]], columns=["nav", "role"])
-        df = pd.concat([df, new_row], ignore_index=True)
-        save_history(df)
-        st.success(f"{nav} を追加しました")
+押し順一覧 = ["123", "132", "213", "231", "312", "321"]
+for i in range(0, len(押し順一覧), 3):
+    cols = st.columns(3)
+    for j in range(3):
+        if i + j < len(押し順一覧):
+            with cols[j]:
+                if st.button(押し順一覧[i + j]):
+                    new_row = pd.DataFrame([[押し順一覧[i + j], role]], columns=["nav", "role"])
+                    df = pd.concat([df, new_row], ignore_index=True)
+                    save_history(df)
+                    df = load_history()
+                    st.success(f"押し順 {押し順一覧[i + j]} を追加しました")
 
-st.subheader("🔮 類似履歴による予測モード")
-recent_df = df.tail(10)
-selected_1st = st.selectbox("現在の1stナビを選択", [1, 2, 3])
-if st.button("🧠 類似履歴から2ndナビを予測"):
-    if len(recent_df) < 1:
-        st.warning("履歴が不足しています")
+st.subheader("🔮 魔力目 成立予測モード")
+f1 = st.selectbox("1stナビを選択", [1, 2, 3])
+if st.button("🧠 AIで2ndナビ候補を予測"):
+    second_probs = {}
+    for f2 in [1, 2, 3]:
+        if f2 != f1:
+            prob = predict_magic(df, f1, f2, model)
+            second_probs[f2] = prob
+    if second_probs:
+        best = max(second_probs, key=second_probs.get)
+        st.success(f"おすすめの2ndナビは **{best}**（魔力目成立確率：{second_probs[best]}%）")
     else:
-        suggestion, confidence = suggest_second_based_on_similarity(df, recent_df, selected_1st)
-        if suggestion:
-            st.success(f"✅ 推奨2ndナビ：{suggestion}（魔力目率：{confidence}%）")
-        else:
-            st.warning("十分な類似履歴が見つかりませんでした")
+        st.warning("2ndナビ候補が見つかりません")
 
-st.subheader("📜 履歴一覧（Granbelm history.csv）")
-st.dataframe(df.tail(30), use_container_width=True)
+st.subheader("📑 履歴一覧（Granbelm history.csv）")
+st.dataframe(df, use_container_width=True)
