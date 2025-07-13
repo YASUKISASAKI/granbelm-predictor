@@ -6,7 +6,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 
 st.set_page_config(page_title="グランベルム 2択予想ツール", layout="centered")
-st.title("グランベルム 2択予想ツール（モバイル対応版 v2）")
+st.title("グランベルム 2択予想ツール（モバイル対応版）")
 
 def load_history():
     try:
@@ -37,9 +37,9 @@ def train_model(df):
     model.fit(X, y)
     return model
 
-def predict_magic(df, first, second, model):
+def predict_magic(df, first, second, third, model):
     prev_lst = int(df["nav"].iloc[-1][0]) if not df.empty else 1
-    X_test = np.array([[int(first), int(second), 1, prev_lst]])  # 3rdは仮に1
+    X_test = np.array([[int(first), int(second), int(third), prev_lst]])
     prob = model.predict_proba(X_test)[0][1]
     return round(prob * 100, 1)
 
@@ -54,7 +54,6 @@ if uploaded_file is not None:
         if set(["nav", "role"]).issubset(ocr_df.columns):
             df = pd.concat([df, ocr_df], ignore_index=True)
             save_history(df)
-            df = load_history()
             st.success("OCRデータをインポートしました")
         else:
             st.error("CSVに 'nav' と 'role' の列が必要です")
@@ -76,7 +75,6 @@ for i in range(0, len(押し順一覧), 3):
                     new_row = pd.DataFrame([[押し順一覧[i + j], role]], columns=["nav", "role"])
                     df = pd.concat([df, new_row], ignore_index=True)
                     save_history(df)
-                    df = load_history()
                     st.success(f"押し順 {押し順一覧[i + j]} を追加しました")
 
 st.subheader("🔮 魔力目 成立予測モード")
@@ -84,7 +82,7 @@ f1 = st.selectbox("1stナビを選択", [1, 2, 3])
 if st.button("🧠 AIで2ndナビ候補を予測"):
     second_probs = {}
     for f2 in [1, 2, 3]:
-        if f2 != f1:
+        if f2 != f1 and f2 != f3:
             prob = predict_magic(df, f1, f2, model)
             second_probs[f2] = prob
     if second_probs:
@@ -93,5 +91,5 @@ if st.button("🧠 AIで2ndナビ候補を予測"):
     else:
         st.warning("2ndナビ候補が見つかりません")
 
-st.subheader("📑 履歴一覧（Granbelm history.csv）")
+st.subheader("📑 履歴一覧")
 st.dataframe(df, use_container_width=True)
