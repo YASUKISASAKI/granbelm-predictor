@@ -1,13 +1,11 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
 
-st.set_page_config(page_title="グランベルム 2択予想ツール", layout="centered")
-
-st.title("🧠 グランベルム 2択予想ツール（モバイル版）")
+st.set_page_config(page_title="グランベルム 類似履歴予測ツール", layout="centered")
+st.title("🔍 グランベルム 類似履歴型 2ndナビ予測ツール v5.2.1（NaN対応）")
 
 @st.cache_data
 def load_history():
@@ -19,78 +17,84 @@ def load_history():
 def save_history(df):
     df.to_csv("Granbelm history.csv", index=False)
 
-def create_features(df):
-    df = df.copy()
-    df["1st"] = df["nav"].astype(str).str[0].astype(int)
-    df["2nd"] = df["nav"].astype(str).str[1].astype(int)
-    df["3rd"] = df["nav"].astype(str).str[2].astype(int)
-    df["is_magic"] = (df["role"] == "魔力目").astype(int)
-    df["prev_1st"] = df["1st"].shift(1).fillna(1).astype(int)
-    return df
+def hamming_distance(s1, s2):
+    if len(s1) != len(s2):
+        return float("inf")
+    return sum(c1 != c2 for c1, c2 in zip(s1, s2))
 
-def train_model(df):
-    if df.empty:
-        return None
-    df = create_features(df)
-    X = df[["1st", "2nd", "3rd", "prev_1st"]]
-    y = df["is_magic"]
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X, y)
-    return model
+def partial_match_score(nav1, nav2):
+    return sum([nav1[i] == nav2[i] for i in range(3)])  # 最大3点
 
-def predict_second_candidate(f1, df):
-    model = train_model(df)
-    if model is None:
-        return "学習データが不足しています"
+def suggest_second_based_on_similarity(df, recent_df, selected_1st):
+    pattern_counts = recent_df["nav"].dropna().astype(str).value_counts()
+    if pattern_counts.empty:
+        return None, 0.0
+    common_patterns = pattern_counts.head(3).index.tolist()
 
-    # 前回1stを履歴から自動取得
-    try:
-        prev_nav = df["nav"].iloc[-1]
-        prev_1st = int(str(prev_nav)[0])
-    except:
-        prev_1st = 1
-
-    best_prob = -1
-    best_2nd = None
-    for f2 in [1, 2, 3]:
-        if f2 == f1:
+    scored_rows = []
+    for idx, row in df.iterrows():
+        nav_str = str(row["nav"])
+        if len(nav_str) != 3:
             continue
-        for f3 in [1, 2, 3]:
-            if f3 in (f1, f2):
+        first_digit = nav_str[0]
+        if first_digit != str(selected_1st):
+            continue
+        max_score = 0
+        for recent_nav in common_patterns:
+            if not isinstance(recent_nav, str):
                 continue
-            X_test = np.array([[f1, f2, f3, prev_1st]])
-            prob = model.predict_proba(X_test)[0][1]
-            if prob > best_prob:
-                best_prob = prob
-                best_2nd = f2
-    return best_2nd
+            if len(nav_str) == len(recent_nav):
+                h_score = max(0, 3 - hamming_distance(nav_str, recent_nav))
+                p_score = partial_match_score(nav_str, recent_nav)
+                total = h_score + p_score
+                max_score = max(max_score, total)
+        scored_rows.append((nav_str, row["role"], max_score))
 
-# --- メイン処理 ---
+    if not scored_rows:
+        return None, 0.0
+
+    sim_df = pd.DataFrame(scored_rows, columns=["nav", "role", "sim_score"])
+    sim_df = sim_df.sort_values(by="sim_score", ascending=False).head(20)
+    sim_df["2nd"] = sim_df["nav"].astype(str).str[1].astype(int)
+    success_rates = sim_df.groupby("2nd")["role"].apply(lambda x: (x == "魔力目").mean())
+    if success_rates.empty:
+        return None, 0.0
+    best_2nd = success_rates.idxmax()
+    confidence = round(success_rates.max() * 100, 1)
+    return best_2nd, confidence
+
 df = load_history()
-
-st.subheader("✍️ 押し順履歴をボタンで追加")
-role = st.selectbox("成立役", ["魔力目", "ベル", "リプレイ"], key="role_input")
-
-cols = st.columns(3)
-orders = ["123", "132", "213", "231", "312", "321"]
-for i, o in enumerate(orders):
-    if cols[i % 3].button(o):
-        df = pd.concat([df, pd.DataFrame([[o, role]], columns=["nav", "role"])], ignore_index=True)
+st.subheader("➕ 実践履歴の追加（ボタン式）")
+col1, col2 = st.columns(2)
+with col1:
+    role_input = st.selectbox("成立役", ["魔力目", "ベル"], key="role_select")
+with col2:
+    if st.button("履歴をリセット"):
+        df = pd.DataFrame(columns=["nav", "role"])
         save_history(df)
-        st.success(f"{o} を追加しました")
+        st.success("履歴をリセットしました")
 
-st.subheader("🔮 魔力目 成立予測モード")
-f1 = st.selectbox("1stナビを選択", [1, 2, 3], key="f1")
+navs = ["123", "132", "213", "231", "312", "321"]
+nav_cols = st.columns(3)
+for i, nav in enumerate(navs):
+    if nav_cols[i % 3].button(nav):
+        new_row = pd.DataFrame([[nav, role_input]], columns=["nav", "role"])
+        df = pd.concat([df, new_row], ignore_index=True)
+        save_history(df)
+        st.success(f"{nav} を追加しました")
 
-if st.button("🧠 AIで2ndナビ候補を予測"):
-    if f1 is None:
-        st.warning("1stナビを選択してください。")
+st.subheader("🔮 類似履歴による予測モード")
+recent_df = df.tail(10)
+selected_1st = st.selectbox("現在の1stナビを選択", [1, 2, 3])
+if st.button("🧠 類似履歴から2ndナビを予測"):
+    if len(recent_df) < 1:
+        st.warning("履歴が不足しています")
     else:
-        try:
-            suggestion = predict_second_candidate(f1, df)
-            st.success(f"AI推奨の2ndナビ候補は：{suggestion}")
-        except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
+        suggestion, confidence = suggest_second_based_on_similarity(df, recent_df, selected_1st)
+        if suggestion:
+            st.success(f"✅ 推奨2ndナビ：{suggestion}（魔力目率：{confidence}%）")
+        else:
+            st.warning("十分な類似履歴が見つかりませんでした")
 
-st.subheader("📜 履歴一覧")
-st.dataframe(df, use_container_width=True)
+st.subheader("📜 履歴一覧（Granbelm history.csv）")
+st.dataframe(df.tail(30), use_container_width=True)
